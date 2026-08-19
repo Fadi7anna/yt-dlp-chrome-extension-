@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Download History — yt-dlp Downloader</title>
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 3v12m0 0l-4-4m4 4l4-4M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div>
+          <h1>Download History</h1>
+          <p class="subtitle">yt-dlp Downloader <span id="versionBadge" class="version-badge">v…</span></p>
+        </div>
+      </div>
+
+      <div class="stats" id="stats">
+        <div class="stat">
+          <span class="stat-value" id="statCount">0</span>
+          <span class="stat-label">Downloads</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value" id="statSize">0 B</span>
+          <span class="stat-label">Total size</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value" id="statActive">0</span>
+          <span class="stat-label">In progress</span>
+        </div>
+      </div>
+
+      <button id="updateBtn" class="btn btn-secondary" title="Check for a newer yt-dlp release">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 4v6h6M20 20v-6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M5 13a7 7 0 0012.9 3.5M19 11A7 7 0 006.1 7.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <span id="updateBtnLabel">Check for Updates</span>
+      </button>
+
+      <button id="openFolderBtn" class="btn btn-secondary">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"
+            stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        </svg>
+        Open Downloads Folder
+      </button>
+    </header>
+
+    <div id="serverWarning" class="server-warning" hidden>
+      <strong>Local helper server not reachable.</strong>
+      Start it with <code>python server/server.py</code>, then reload this page.
+    </div>
+
+    <div id="ffmpegWarning" class="server-warning warn" hidden>
+      <strong>ffmpeg not found.</strong>
+      Best-quality downloads need it to combine the video and audio streams.
+      Install it with <code>winget install ffmpeg</code> and restart the server.
+    </div>
+
+    <div class="toolbar">
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <input id="search" type="text" placeholder="Search by title or channel…" autocomplete="off">
+      </div>
+
+      <div class="filter-pills" id="filterPills">
+        <button class="pill active" data-filter="all">All</button>
+        <button class="pill" data-filter="downloading">In progress</button>
+        <button class="pill" data-filter="done">Completed</button>
+        <button class="pill" data-filter="error">Failed</button>
+      </div>
+
+      <select id="sortSelect" class="sort-select">
+        <option value="newest">Newest first</option>
+        <option value="oldest">Oldest first</option>
+        <option value="title">Title A–Z</option>
+        <option value="size">Largest first</option>
+      </select>
+
+      <button id="clearFailedBtn" class="btn btn-secondary" title="Remove all failed and cancelled records">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m2 0v13a1 1 0 01-1 1H8a1 1 0 01-1-1V7h10z"
+            stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Clear failed
+      </button>
+    </div>
+
+    <main id="content">
+      <div id="loading" class="loading">Loading history…</div>
+      <div id="empty" class="empty" hidden>
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 3v12m0 0l-4-4m4 4l4-4M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2"
+            stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <h2>No downloads yet</h2>
+        <p>Videos you download from the extension popup will show up here.</p>
+      </div>
+      <div id="grid" class="grid" hidden></div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>yt-dlp Downloader</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="header">
+    <h1>
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="brand-icon">
+        <path d="M12 3v12m0 0l-4-4m4 4l4-4M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2"
+          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      yt-dlp
+    </h1>
+    <button id="historyBtn" class="btn-chip" title="View download history">
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      History
+    </button>
+  </header>
+
+  <div id="serverWarning" class="banner banner-error" hidden>
+    <strong>Helper server not running.</strong>
+    <span>Start it with <code>python server/server.py</code>, then reopen this popup.</span>
+  </div>
+
+  <div id="ffmpegWarning" class="banner banner-warn" hidden>
+    <strong>ffmpeg not found.</strong>
+    <span>Only single-stream formats can download. Install it with
+    <code>winget install ffmpeg</code> and restart the server.</span>
+  </div>
+
+  <section id="videoCard" class="video-card" hidden>
+    <div class="video-thumb"><img id="videoThumb" alt=""></div>
+    <div class="video-info">
+      <div id="videoTitle" class="video-title"></div>
+      <div id="videoMeta" class="video-meta"></div>
+    </div>
+  </section>
+
+  <div id="urlRow" class="url-row">
+    <span id="url" class="url-text">Reading current tab…</span>
+  </div>
+
+  <label class="field-label" for="qualitySelect">Quality</label>
+  <select id="qualitySelect" disabled>
+    <option>Loading…</option>
+  </select>
+  <div id="qualityHint" class="hint"></div>
+
+  <details id="optionsBox" class="options">
+    <summary>Options</summary>
+    <label class="check"><input type="checkbox" id="optThumbnail"> Embed cover thumbnail</label>
+    <label class="check"><input type="checkbox" id="optSubtitles"> Embed English subtitles</label>
+    <label class="check"><input type="checkbox" id="optMetadata" checked> Write title/artist metadata</label>
+  </details>
+
+  <button id="downloadBtn" class="btn-primary" disabled>Download</button>
+  <button id="cancelBtn" class="btn-danger" hidden>Cancel download</button>
+
+  <div id="progressWrap" class="progress-wrap" hidden>
+    <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+  </div>
+  <div id="status" class="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

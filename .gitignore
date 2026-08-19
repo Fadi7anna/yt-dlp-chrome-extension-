@@ -1,0 +1,20 @@
+# Runtime state — contains local file paths and your download history
+server/data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Partial downloads
+*.part
+*.ytdl
+
+# Editor / tooling
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
