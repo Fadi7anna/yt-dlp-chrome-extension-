@@ -34,6 +34,12 @@
     <code>winget install ffmpeg</code> and restart the server.</span>
   </div>
 
+  <div id="updateBanner" class="banner banner-info" hidden>
+    <strong>A newer extension is on disk.</strong>
+    <span>The helper server pulled v<span id="updateVersion"></span>. Reloading picks it up.</span>
+    <button id="reloadExtBtn" class="btn-chip">Reload extension</button>
+  </div>
+
   <section id="videoCard" class="video-card" hidden>
     <div class="video-thumb"><img id="videoThumb" alt=""></div>
     <div class="video-info">

@@ -11,6 +11,8 @@
   --warn-border: #8a6d24;
   --error-bg: #3d1f1f;
   --error-border: #8e4141;
+  --info-bg: #16283a;
+  --info-border: #2f5f8a;
 }
 
 * { box-sizing: border-box; }
@@ -71,6 +73,8 @@ h1 {
 .banner strong { display: block; margin-bottom: 2px; }
 .banner-error { background: var(--error-bg); border-color: var(--error-border); }
 .banner-warn { background: var(--warn-bg); border-color: var(--warn-border); }
+.banner-info { background: var(--info-bg); border-color: var(--info-border); }
+.banner-info .btn-chip { margin-top: 6px; }
 .banner code {
   padding: 1px 4px;
   font-size: 11px;

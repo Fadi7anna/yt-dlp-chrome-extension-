@@ -186,6 +186,17 @@ body {
   font-size: 13px;
   margin-bottom: 20px;
 }
+.server-warning.info {
+  background: var(--info-soft);
+  border-color: rgba(76, 159, 254, 0.4);
+  color: #9dc9ff;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.server-warning.info .btn { margin-left: auto; }
+
 .server-warning code {
   background: rgba(0,0,0,0.25);
   padding: 1px 6px;

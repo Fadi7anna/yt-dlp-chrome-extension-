@@ -20,6 +20,9 @@ const els = {
   progressFill: document.getElementById("progressFill"),
   status: document.getElementById("status"),
   historyBtn: document.getElementById("historyBtn"),
+  updateBanner: document.getElementById("updateBanner"),
+  updateVersion: document.getElementById("updateVersion"),
+  reloadExtBtn: document.getElementById("reloadExtBtn"),
 };
 
 let currentUrl = null;
@@ -130,7 +133,10 @@ function renderVideoCard(data) {
 }
 
 function renderQualityOptions(data, preferred) {
-  presets = (data.presets || []).filter((p) => p.available);
+  // duplicate_of marks a resolution cap that resolves to the streams another
+  // preset already offers -- on a 360p video every cap from 2160p down picks
+  // the same file, and seven identical rows buried the choices that differ.
+  presets = (data.presets || []).filter((p) => p.available && !p.duplicate_of);
   formats = data.formats || [];
   els.quality.innerHTML = "";
 
@@ -304,6 +310,9 @@ async function startDownload() {
   try {
     const data = await postJson("/download", body);
     activeJobId = data.job_id;
+    // Wake the service worker so the toolbar badge starts moving now rather
+    // than whenever its next minute-alarm happens to fire.
+    chrome.runtime.sendMessage({ type: "download-started" }).catch(() => {});
     if (data.queued_behind > 0) {
       setStatus(`Queued behind ${data.queued_behind} other download(s)…`);
     }
@@ -348,6 +357,31 @@ async function reattachActiveJob() {
 }
 
 // --------------------------------------------------------------------------- //
+// staying up to date
+//
+// The service worker reloads the extension by itself when the helper server
+// pulls a newer one, but not while a popup or dashboard is open -- a reload
+// closes them. So when a popup is what's open, it offers the reload instead.
+// --------------------------------------------------------------------------- //
+
+async function checkExtensionUpdate() {
+  let info;
+  try {
+    info = await api("/extension");
+  } catch (e) {
+    return;
+  }
+  const running = chrome.runtime.getManifest().version;
+  if (!info.version || info.version === running) return;
+  els.updateVersion.textContent = info.version;
+  els.updateBanner.hidden = false;
+}
+
+els.reloadExtBtn.addEventListener("click", () => {
+  chrome.runtime.reload();
+});
+
+// --------------------------------------------------------------------------- //
 // init
 // --------------------------------------------------------------------------- //
 
@@ -364,6 +398,7 @@ async function init() {
     return;
   }
   els.ffmpegWarning.hidden = !!health.ffmpeg;
+  checkExtensionUpdate();   // not awaited: it must never delay reading formats
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentUrl = tab && tab.url ? tab.url : null;

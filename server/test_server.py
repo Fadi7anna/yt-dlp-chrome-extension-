@@ -9,7 +9,9 @@ Run with:  python -m unittest discover -s server
 
 import importlib.util
 import os
+import socket
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -141,6 +143,10 @@ class FormatSelectionTests(unittest.TestCase):
 
 
 class ResumeAfterFailureTests(unittest.TestCase):
+    def test_416_is_recognised_as_a_range_error(self):
+        self.assertTrue(srv.is_range_error(
+            "unable to download video data: HTTP Error 416: Requested range not satisfiable"))
+
     def test_resumes_when_the_attempt_transferred_something(self):
         self.assertTrue(srv.should_resume_after_failure(True))
 
@@ -148,6 +154,11 @@ class ResumeAfterFailureTests(unittest.TestCase):
         # A stale .part makes the resume Range request 403 instantly, so a retry
         # that resumes too would fail the same way forever.
         self.assertFalse(srv.should_resume_after_failure(False))
+
+    def test_failed_redownload_preserves_a_partial(self):
+        self.assertFalse(srv.redownload_overwrites({"status": "error"}))
+        self.assertFalse(srv.redownload_overwrites({"status": "cancelled"}))
+        self.assertTrue(srv.redownload_overwrites({"status": "done"}))
 
 
 class OutputNameTests(unittest.TestCase):
@@ -228,6 +239,244 @@ class OriginGuardTests(unittest.TestCase):
         # Any page you visit could otherwise POST /delete to 127.0.0.1:4599.
         self.assertFalse(srv.origin_allowed("https://example.com"))
         self.assertFalse(srv.origin_allowed("http://localhost:3000"))
+
+
+class SecFetchGuardTests(unittest.TestCase):
+    """Requests that carry no Origin at all still have to be placed.
+
+    <img src="http://127.0.0.1:4599/formats?url=..."> sends no Origin, so the
+    origin check alone waves it through -- and while the page cannot read the
+    reply, it has still made this machine run a full extraction on command.
+    Chrome labels such loads cross-site; curl sends no label at all.
+    """
+
+    def test_extension_requests_are_allowed(self):
+        self.assertTrue(srv.request_allowed("chrome-extension://abc", "none"))
+
+    def test_non_browser_clients_are_allowed(self):
+        self.assertTrue(srv.request_allowed(None, None))
+
+    def test_cross_site_loads_without_an_origin_are_refused(self):
+        self.assertFalse(srv.request_allowed(None, "cross-site"))
+
+    def test_same_origin_loads_without_an_origin_are_allowed(self):
+        self.assertTrue(srv.request_allowed(None, "same-origin"))
+
+    def test_a_web_origin_is_still_refused_whatever_the_label(self):
+        self.assertFalse(srv.request_allowed("https://example.com", "same-origin"))
+
+
+class DuplicatePresetTests(unittest.TestCase):
+    """A resolution cap that changes nothing is not a choice.
+
+    On a 240p video "Up to 2160p" through "Up to 480p" all resolve to the same
+    two streams, so the dropdown showed seven rows that download an identical
+    file and buried the ones that differ.
+    """
+
+    def test_caps_that_resolve_identically_are_flagged(self):
+        presets = srv.mark_duplicate_presets([
+            {"key": "max", "available": True, "format_ids": ["133", "140"]},
+            {"key": "2160", "available": True, "format_ids": ["133", "140"]},
+            {"key": "720", "available": True, "format_ids": ["133", "140"]},
+        ])
+        self.assertNotIn("duplicate_of", presets[0])
+        self.assertEqual(presets[1]["duplicate_of"], "max")
+        self.assertEqual(presets[2]["duplicate_of"], "max")
+
+    def test_caps_that_pick_something_else_are_kept(self):
+        presets = srv.mark_duplicate_presets([
+            {"key": "max", "available": True, "format_ids": ["299", "140"]},
+            {"key": "720", "available": True, "format_ids": ["136", "140"]},
+        ])
+        self.assertNotIn("duplicate_of", presets[1])
+
+    def test_intent_presets_are_never_hidden(self):
+        # "Best MP4" and "Audio only" say what you want, not how big it is --
+        # they stay listed even when another preset picks the same streams.
+        presets = srv.mark_duplicate_presets([
+            {"key": "max", "available": True, "format_ids": ["133", "140"]},
+            {"key": "mp4", "available": True, "format_ids": ["133", "140"]},
+            {"key": "audio", "available": True, "format_ids": ["140"]},
+            {"key": "mp3", "available": True, "format_ids": ["140"]},
+        ])
+        for entry in presets:
+            self.assertNotIn("duplicate_of", entry, entry["key"])
+
+    def test_unavailable_presets_are_left_alone(self):
+        presets = srv.mark_duplicate_presets([
+            {"key": "max", "available": True, "format_ids": ["133", "140"]},
+            {"key": "1080", "available": False},
+        ])
+        self.assertNotIn("duplicate_of", presets[1])
+
+
+class ProgressFallbackTests(unittest.TestCase):
+    """A finished download must not read as "lost contact with the server".
+
+    The JOBS table is in memory only, so an auto-update restart (or the
+    eviction that keeps it under 200 entries) turned a poll into a 404 and the
+    popup sat on a connection error for a download that had actually succeeded.
+    """
+
+    def setUp(self):
+        self._history = list(srv.HISTORY)
+        srv.HISTORY.clear()
+
+    def tearDown(self):
+        srv.HISTORY[:] = self._history
+
+    def test_unknown_job_with_no_record_stays_unknown(self):
+        self.assertIsNone(srv.progress_from_history("nope"))
+
+    def test_a_finished_record_answers_the_poll(self):
+        srv.HISTORY.append({"id": "r1", "job_id": "j1", "status": "done",
+                            "filepath": "x.mp4"})
+        payload = srv.progress_from_history("j1")
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["record_id"], "r1")
+        self.assertTrue(payload["from_history"])
+
+    def test_a_record_left_mid_download_is_reported_as_failed(self):
+        # Nothing is running it any more -- the process that owned it is gone --
+        # so answering "downloading" would leave the popup waiting forever.
+        srv.HISTORY.append({"id": "r2", "job_id": "j2", "status": "downloading"})
+        payload = srv.progress_from_history("j2")
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("restarted", payload["error"])
+
+
+class ExtensionSyncTests(unittest.TestCase):
+    """Fast-forwarding the checkout: what keeps the extension current."""
+
+    def setUp(self):
+        self._real_git = srv.run_git
+        self._state = dict(srv.EXTENSION_STATE)
+        srv.EXTENSION_STATE["auto_update"] = True
+        srv.EXTENSION_STATE["syncing"] = False
+
+    def tearDown(self):
+        srv.run_git = self._real_git
+        srv.EXTENSION_STATE.clear()
+        srv.EXTENSION_STATE.update(self._state)
+
+    def _fake_git(self, responses):
+        calls = []
+
+        def fake(args, timeout=90):
+            calls.append(args)
+            for prefix, result in responses:
+                if args[:len(prefix)] == prefix:
+                    return result
+            return True, ""
+
+        srv.run_git = fake
+        return calls
+
+    UPSTREAM = ["rev-parse", "--abbrev-ref", "main@{upstream}"]
+
+    def test_a_dirty_checkout_is_never_touched(self):
+        # Uncommitted work is the one thing an automatic pull must not risk.
+        calls = self._fake_git([
+            (["rev-parse", "--is-inside-work-tree"], (True, "true")),
+            (["rev-parse", "--abbrev-ref", "HEAD"], (True, "main")),
+            (self.UPSTREAM, (True, "origin/main")),
+            (["status", "--porcelain"], (True, " M server/server.py")),
+        ])
+        self.assertEqual(srv.sync_extension(), "dirty")
+        self.assertNotIn("fetch", [c[0] for c in calls])
+        self.assertNotIn("merge", [c[0] for c in calls])
+
+    def test_no_upstream_is_reported_rather_than_guessed_at(self):
+        self._fake_git([
+            (["rev-parse", "--is-inside-work-tree"], (True, "true")),
+            (["rev-parse", "--abbrev-ref", "HEAD"], (True, "main")),
+            (self.UPSTREAM, (False, "no upstream")),
+        ])
+        self.assertEqual(srv.sync_extension(), "unavailable")
+
+    def test_an_up_to_date_checkout_does_not_merge(self):
+        calls = self._fake_git([
+            (["rev-parse", "--is-inside-work-tree"], (True, "true")),
+            (["rev-parse", "--abbrev-ref", "HEAD"], (True, "main")),
+            (self.UPSTREAM, (True, "origin/main")),
+            (["status", "--porcelain"], (True, "")),
+            (["fetch"], (True, "")),
+            (["rev-parse", "HEAD"], (True, "abc123")),
+            (["rev-parse", "origin/main"], (True, "abc123")),
+        ])
+        self.assertEqual(srv.sync_extension(), "up_to_date")
+        self.assertNotIn("merge", [c[0] for c in calls])
+
+    def test_a_newer_upstream_is_fast_forwarded(self):
+        calls = self._fake_git([
+            (["rev-parse", "--is-inside-work-tree"], (True, "true")),
+            (["rev-parse", "--abbrev-ref", "HEAD"], (True, "main")),
+            (self.UPSTREAM, (True, "origin/main")),
+            (["status", "--porcelain"], (True, "")),
+            (["fetch"], (True, "")),
+            (["rev-parse", "HEAD"], (True, "aaaaaaaa")),
+            (["rev-parse", "origin/main"], (True, "bbbbbbbb")),
+            (["merge", "--ff-only", "bbbbbbbb"], (True, "")),
+            (["diff"], (True, "extension/popup.js\nextension/manifest.json")),
+        ])
+        self.assertEqual(srv.sync_extension(restart_on_server_change=False), "updated")
+        self.assertIn(["merge", "--ff-only", "bbbbbbbb"], calls)
+        self.assertEqual(srv.EXTENSION_STATE["commit"], "bbbbbbbb")
+
+    def test_a_merge_that_cannot_fast_forward_stops(self):
+        # Diverged local history: anything other than stopping would rewrite
+        # commits the user made.
+        self._fake_git([
+            (["rev-parse", "--is-inside-work-tree"], (True, "true")),
+            (["rev-parse", "--abbrev-ref", "HEAD"], (True, "main")),
+            (self.UPSTREAM, (True, "origin/main")),
+            (["status", "--porcelain"], (True, "")),
+            (["fetch"], (True, "")),
+            (["rev-parse", "HEAD"], (True, "aaaaaaaa")),
+            (["rev-parse", "origin/main"], (True, "bbbbbbbb")),
+            (["merge", "--ff-only", "bbbbbbbb"], (False, "Not possible to fast-forward")),
+        ])
+        self.assertEqual(srv.sync_extension(), "error")
+        self.assertIn("fast-forward", srv.EXTENSION_STATE["last_error"])
+
+    def test_disabling_it_stops_git_being_run_at_all(self):
+        calls = self._fake_git([])
+        srv.EXTENSION_STATE["auto_update"] = False
+        srv.sync_extension()
+        self.assertEqual(calls, [])
+
+    def test_the_manifest_version_is_readable(self):
+        # This is what the service worker compares against to decide whether the
+        # extension Chrome is running is the one on disk.
+        self.assertRegex(srv.read_extension_version() or "", r"^\d+\.\d+")
+
+
+class BindRetryTests(unittest.TestCase):
+    """An update restart must not be able to leave no server running."""
+
+    def test_a_busy_port_is_retried_then_reported(self):
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        port = sock.getsockname()[1]
+        try:
+            started = time.time()
+            self.assertIsNone(srv.bind_server(port, retry_seconds=1))
+            self.assertGreaterEqual(time.time() - started, 0.5)
+        finally:
+            sock.close()
+
+    def test_a_free_port_binds_immediately(self):
+        server = srv.bind_server(0, retry_seconds=1)
+        self.assertIsNotNone(server)
+        server.server_close()
+
+    def test_the_socket_is_not_shared_with_a_predecessor(self):
+        # allow_reuse_address on Windows means "bind even though another live
+        # socket already has this port", which splits incoming connections
+        # between the old server and the new one during an update handover.
+        self.assertFalse(srv.Server.allow_reuse_address)
 
 
 class PathSafetyTests(unittest.TestCase):

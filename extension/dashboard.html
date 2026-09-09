@@ -15,7 +15,8 @@
         </svg>
         <div>
           <h1>Download History</h1>
-          <p class="subtitle">yt-dlp Downloader <span id="versionBadge" class="version-badge">v…</span></p>
+          <p class="subtitle">yt-dlp Downloader <span id="versionBadge" class="version-badge">v…</span>
+          <span id="extBadge" class="version-badge" title="Extension version">ext v…</span></p>
         </div>
       </div>
 
@@ -52,6 +53,12 @@
         Open Downloads Folder
       </button>
     </header>
+
+    <div id="updateBanner" class="server-warning info" hidden>
+      <span><strong>A newer extension is on disk.</strong>
+      The helper server pulled v<span id="updateVersion"></span>. Reload to run it.</span>
+      <button id="reloadExtBtn" class="btn btn-secondary">Reload extension</button>
+    </div>
 
     <div id="serverWarning" class="server-warning" hidden>
       <strong>Local helper server not reachable.</strong>

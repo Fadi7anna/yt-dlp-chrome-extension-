@@ -19,6 +19,10 @@ const els = {
   updateBtn: document.getElementById("updateBtn"),
   updateBtnLabel: document.getElementById("updateBtnLabel"),
   versionBadge: document.getElementById("versionBadge"),
+  extBadge: document.getElementById("extBadge"),
+  updateBanner: document.getElementById("updateBanner"),
+  updateVersion: document.getElementById("updateVersion"),
+  reloadExtBtn: document.getElementById("reloadExtBtn"),
   toast: document.getElementById("toast"),
 };
 
@@ -446,6 +450,7 @@ async function refreshVersion() {
       pollingForRestart = false;
       showToast(`Updated to v${v.current_version} and restarted`, "success");
     }
+    refreshExtensionVersion();
   } catch (e) {
     if (pollingForRestart) {
       // execv drops the listening socket briefly; keep polling.
@@ -453,6 +458,54 @@ async function refreshVersion() {
     }
   }
 }
+
+// --------------------------------------------------------------------------- //
+// extension version
+//
+// The server fast-forwards this checkout when it upgrades yt-dlp, so the files
+// on disk can be newer than the extension Chrome is running. The service
+// worker reloads by itself when nothing is open -- but this page being open is
+// exactly the case where it won't, because a reload would close it. So say so
+// and let the reload be a click.
+// --------------------------------------------------------------------------- //
+
+const RUNNING_VERSION = chrome.runtime.getManifest().version;
+
+async function refreshExtensionVersion() {
+  let info;
+  try {
+    info = await api("/extension");
+  } catch (e) {
+    return;
+  }
+  const onDisk = info.version;
+  els.extBadge.textContent = `ext v${RUNNING_VERSION}`;
+
+  const stale = onDisk && onDisk !== RUNNING_VERSION;
+  els.extBadge.classList.toggle("stale", !!stale);
+  els.extBadge.title = stale
+    ? `v${onDisk} is on disk — reload to run it`
+    : describeSync(info);
+  els.updateBanner.hidden = !stale;
+  if (stale) els.updateVersion.textContent = onDisk;
+}
+
+function describeSync(info) {
+  if (info.last_result === "dirty") {
+    return "Extension auto-update paused: this checkout has uncommitted changes.";
+  }
+  if (info.last_result === "unavailable") {
+    return `Extension auto-update unavailable (${info.last_error || "no git remote"}).`;
+  }
+  if (info.last_result === "error") {
+    return `Last extension sync failed: ${info.last_error || "unknown error"}`;
+  }
+  return "Extension is up to date.";
+}
+
+els.reloadExtBtn.addEventListener("click", () => {
+  chrome.runtime.reload();
+});
 
 els.updateBtn.addEventListener("click", async () => {
   els.updateBtn.classList.add("spinning");
@@ -486,7 +539,10 @@ let versionTimer = null;
 function startPolling() {
   stopPolling();
   historyTimer = setInterval(refresh, POLL_MS);
-  versionTimer = setInterval(refreshVersion, VERSION_POLL_MS);
+  versionTimer = setInterval(() => {
+    refreshVersion();
+    refreshExtensionVersion();
+  }, VERSION_POLL_MS);
 }
 
 function stopPolling() {
@@ -501,10 +557,12 @@ document.addEventListener("visibilitychange", () => {
   } else {
     refresh();
     refreshVersion();
+    refreshExtensionVersion();
     startPolling();
   }
 });
 
 refresh();
 refreshVersion();
+refreshExtensionVersion();
 startPolling();

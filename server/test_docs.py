@@ -26,6 +26,23 @@ SERVER_SPEC.loader.exec_module(srv)
 README = io.open(ROOT / "README.md", encoding="utf-8").read()
 SOURCE = io.open(SERVER_PATH, encoding="utf-8").read()
 MANIFEST = json.loads(io.open(ROOT / "extension" / "manifest.json", encoding="utf-8").read())
+BACKGROUND = io.open(ROOT / "extension" / "background.js", encoding="utf-8").read()
+
+
+class ReadmeCase(unittest.TestCase):
+    """assertIn against the README prints the entire file when it fails.
+
+    That buries the one line that matters under 300 lines of prose, so state the
+    claim instead of the haystack.
+    """
+
+    def assertReadme(self, needle, why=""):
+        self.assertTrue(needle in README,
+                        f"README does not mention {needle!r}{': ' + why if why else ''}")
+
+    def assertNotReadme(self, needle, why=""):
+        self.assertFalse(needle in README,
+                         f"README still mentions {needle!r}{': ' + why if why else ''}")
 
 
 class ApiTableTests(unittest.TestCase):
@@ -59,7 +76,7 @@ class ApiTableTests(unittest.TestCase):
         self.assertEqual(undocumented, [], f"routed but undocumented: {undocumented}")
 
 
-class PresetTableTests(unittest.TestCase):
+class PresetTableTests(ReadmeCase):
     def test_every_preset_label_appears_in_the_readme(self):
         for key, preset in srv.QUALITY_PRESETS.items():
             label = preset["label"]
@@ -68,7 +85,7 @@ class PresetTableTests(unittest.TestCase):
             self.assertIn(label, README, f"preset {key} ({label!r}) is undocumented")
 
     def test_capped_presets_are_mentioned(self):
-        self.assertIn("Up to 2160p / 1440p / 1080p / 720p / 480p", README)
+        self.assertReadme("Up to 2160p / 1440p / 1080p / 720p / 480p")
 
     def test_readme_does_not_promise_a_preset_that_was_removed(self):
         for label in re.findall(r"^\| ([A-Z][^|]{3,40}?) \| ", README, re.M):
@@ -96,49 +113,49 @@ class ConfigurationTableTests(unittest.TestCase):
         self.assertEqual(unused, [], f"documented but never read: {unused}")
 
 
-class StatedDefaultsTests(unittest.TestCase):
+class StatedDefaultsTests(ReadmeCase):
     def test_port(self):
-        self.assertIn("`4599`", README)
+        self.assertReadme("`4599`")
         self.assertEqual(srv.PORT, 4599)
 
     def test_concurrency(self):
         self.assertEqual(srv.MAX_CONCURRENT, 2)
-        self.assertIn("Simultaneous downloads", README)
+        self.assertReadme("Simultaneous downloads")
 
     def test_history_cap(self):
         self.assertEqual(srv.HISTORY_LIMIT, 500)
-        self.assertIn("500 most recent", README)
+        self.assertReadme("500 most recent")
 
     def test_formats_cache_ttl(self):
         self.assertEqual(srv.FORMATS_CACHE_TTL, 300)
-        self.assertIn("cached 5 min", README)
+        self.assertReadme("cached 5 min")
 
     def test_auto_update_interval(self):
         self.assertEqual(srv.AUTO_UPDATE_INTERVAL_SECONDS, 6 * 60 * 60)
-        self.assertIn("every 6 hours", README)
+        self.assertReadme("every 6 hours")
 
     def test_loopback_only(self):
         self.assertIn('Server(("127.0.0.1"', SOURCE)
-        self.assertIn("binds `127.0.0.1`", README)
+        self.assertReadme("binds `127.0.0.1`")
 
     def test_download_directory(self):
-        self.assertIn("~/Downloads/yt-dlp-extension", README)
+        self.assertReadme("~/Downloads/yt-dlp-extension")
 
 
-class DocumentedBehaviourTests(unittest.TestCase):
+class DocumentedBehaviourTests(ReadmeCase):
     def test_readme_describes_the_quality_tagged_filenames(self):
         self.assertIn("%(format_id)s", srv.build_ydl_opts({"quality": "max"})["outtmpl"])
-        self.assertIn("File naming", README)
+        self.assertReadme("File naming")
 
     def test_readme_states_ffmpeg_is_required_for_merges(self):
-        self.assertIn("ffmpeg is not optional", README)
+        self.assertReadme("ffmpeg is not optional")
 
     def test_readme_states_the_pot_provider_is_optional(self):
-        self.assertIn("not required", README)
+        self.assertReadme("not required")
         self.assertNotIn("player_client", srv.YOUTUBE_EXTRACTOR_ARGS.get("youtube", {}))
 
     def test_readme_explains_why_nothing_is_pinned(self):
-        self.assertIn("http_chunk_size", README)
+        self.assertReadme("http_chunk_size")
         self.assertNotIn("http_chunk_size", srv.COMMON_OPTS)
 
     def test_readme_documents_the_encoder_preference(self):
@@ -163,12 +180,67 @@ class ExtensionTests(unittest.TestCase):
                     continue
                 self.assertTrue((ROOT / "extension" / ref).exists(), f"{page} -> {ref}")
 
+    def test_the_service_worker_is_declared_and_present(self):
+        # Without it there is no auto-reload, no badge, and no context menu --
+        # the extension quietly loses everything that works with nothing open.
+        worker = MANIFEST.get("background", {}).get("service_worker")
+        self.assertTrue(worker, "manifest declares no service worker")
+        self.assertTrue((ROOT / "extension" / worker).exists(), worker)
+
+    def test_the_worker_only_uses_apis_the_manifest_asks_for(self):
+        needed = {
+            "chrome.alarms": "alarms",
+            "chrome.notifications": "notifications",
+            "chrome.contextMenus": "contextMenus",
+            "chrome.storage": "storage",
+        }
+        missing = [perm for api, perm in needed.items()
+                   if api in BACKGROUND and perm not in MANIFEST["permissions"]]
+        self.assertEqual(missing, [], f"used by background.js but not requested: {missing}")
+
+    def test_the_worker_reloads_at_most_once_per_version(self):
+        # The guard against reload-looping the browser when new files don't load.
+        self.assertIn("reloadedFor", BACKGROUND)
+        self.assertIn("chrome.runtime.reload", BACKGROUND)
+
+    def test_the_worker_asks_the_endpoint_the_server_actually_serves(self):
+        for path in re.findall(r'api\("(/[a-z_]+)"', BACKGROUND):
+            self.assertIn(f'"{path}"', SOURCE, f"background.js calls unrouted {path}")
+
+    def test_getcontexts_is_available_at_the_declared_minimum_chrome(self):
+        # getContexts landed in Chrome 116; below that the reload guard would
+        # throw and every update would close whatever page was open.
+        if "getContexts" in BACKGROUND:
+            self.assertGreaterEqual(int(MANIFEST["minimum_chrome_version"]), 116)
+
     def test_permissions_match_what_the_code_uses(self):
-        popup = io.open(ROOT / "extension" / "popup.js", encoding="utf-8").read()
+        with io.open(ROOT / "extension" / "popup.js", encoding="utf-8") as f:
+            popup = f.read()
         if "chrome.storage" in popup:
             self.assertIn("storage", MANIFEST["permissions"])
         if "chrome.tabs.query" in popup:
             self.assertIn("activeTab", MANIFEST["permissions"])
+
+
+class TestCountTests(ReadmeCase):
+    """The README quotes test counts; they were wrong within one commit.
+
+    A stated count is a promise about coverage, and a stale one quietly says
+    "we test less than we do" -- or, worse, more.
+    """
+
+    @staticmethod
+    def count(path):
+        # Anchored to the start of a line, so the pattern this method quotes
+        # does not count itself.
+        with io.open(path, encoding="utf-8") as f:
+            return len(re.findall(r"^    def test_", f.read(), re.M))
+
+    def test_the_behaviour_test_count_is_right(self):
+        self.assertReadme(f"**{self.count(ROOT / 'server' / 'test_server.py')} behaviour tests**")
+
+    def test_the_documentation_test_count_is_right(self):
+        self.assertReadme(f"**{self.count(Path(__file__))} documentation tests**")
 
 
 if __name__ == "__main__":

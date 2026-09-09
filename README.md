@@ -136,14 +136,65 @@ History persists across restarts in `server/data/history.json` (capped at the 50
 
 ## 5. Staying up to date
 
-The server checks PyPI for a newer `yt-dlp` every 6 hours. If there is one it upgrades and restarts
-itself, so YouTube-side breakage (403s, broken extraction) gets picked up automatically. It asks PyPI
-for the version first and only runs `pip install` when there's actually something newer.
+The server checks for updates every 6 hours and keeps **both halves of this tool** current, so the
+extension follows along without you touching `chrome://extensions`.
 
-A restart **waits for in-flight downloads to finish** rather than killing them. The dashboard's
-**Check for Updates** button runs the same check on demand.
+### yt-dlp
+
+The server asks PyPI for the current version and only runs `pip install` when there is actually
+something newer. If it upgrades, it restarts into the new release, so YouTube-side breakage (403s,
+broken extraction) is picked up on its own.
+
+A restart **waits for in-flight downloads to finish** rather than killing them, and the replacement
+process retries the bind for 20 seconds so the handover can't leave you with no server at all.
 
 Turn it off with `YTDLP_AUTO_UPDATE=0`.
+
+### The extension itself
+
+yt-dlp releases fix what YouTube changed. Everything else — a preset that picks the wrong stream, a
+progress bar that lies, a new failure mode — is fixed *here*, in this repository. But Chrome never
+re-reads an unpacked extension on its own: it runs whatever it loaded until something calls
+`chrome.runtime.reload()`. So the same loop that upgrades yt-dlp also **fast-forwards this checkout**
+from its git remote, and the extension's service worker notices the newer `manifest.json` version on
+disk and reloads itself.
+
+The pull is deliberately timid, because it runs unattended:
+
+| It will | It will not |
+|---|---|
+| `git fetch`, then `merge --ff-only` | Merge, rebase, or resolve a conflict |
+| Skip entirely when the working tree is dirty | Touch, stash, or discard uncommitted work |
+| Report "cannot fast-forward" and stop | Rewrite local commits that have diverged |
+| Restart the server when the pull changed `server/` | Reload the extension while a popup or the dashboard is open |
+
+That last row matters: `chrome.runtime.reload()` closes any extension page. So the reload happens
+silently when nothing of ours is open, and when the dashboard *is* open it shows a **Reload
+extension** button instead of closing itself under you.
+
+A reload is attempted **once per on-disk version**. If the new files don't load — a syntax error, a
+manifest Chrome rejects — the old worker comes back, sees the version it already tried, and stops
+rather than reload-looping the browser.
+
+The dashboard's **Check for Updates** button runs both halves on demand, and its header shows the
+running yt-dlp version next to the running extension version.
+
+Turn the checkout sync off with `YTDLP_EXTENSION_AUTO_UPDATE=0`. It's a no-op anyway on a copy with
+no git remote — the server reports "unavailable" and keeps downloading.
+
+> Because the reload trigger is the manifest version, **any change to the extension needs a version
+> bump in `manifest.json`**. A pull that changes JavaScript without one is on disk but not running.
+
+## 6. Beyond the popup
+
+The extension has a background service worker, so these work with nothing open:
+
+- **The toolbar icon shows download state** — a percentage while one download runs, a count while
+  several do, and a red `!` when the helper server isn't running.
+- **A notification when a download finishes or fails.** Clicking a "finished" one opens the file.
+- **Right-click → Download with yt-dlp**, on a link, a page, or a `<video>`/`<audio>` element.
+  It uses whatever quality the popup last saved, or you can pick one from the submenu. (An *exact
+  format id* is never reused this way — those belong to one specific video.)
 
 ## YouTube notes
 
@@ -235,6 +286,7 @@ All optional, all environment variables:
 | `YTDLP_POT_PROVIDER_URL` | `http://127.0.0.1:4416` | bgutil provider |
 | `YTDLP_POT_SERVER_HOME` | `~/bgutil-ytdlp-pot-provider/server` | bgutil checkout, for the script provider |
 | `YTDLP_AUTO_UPDATE` | `1` | `0` disables background upgrades |
+| `YTDLP_EXTENSION_AUTO_UPDATE` | `1` | `0` stops fast-forwarding the extension checkout |
 | `YTDLP_EXTRA_ORIGINS` | — | Extra allowed CORS origins, comma-separated |
 
 If the port is taken the server says so plainly instead of dumping a traceback.
@@ -245,6 +297,10 @@ The server binds `127.0.0.1` only, and accepts requests **only from browser exte
 (`chrome-extension://`, `moz-extension://`) or non-browser clients. Any web page you visit can reach
 `127.0.0.1:4599`, so a wide-open `Access-Control-Allow-Origin: *` would let any site start downloads,
 open files, or delete them. Web-page origins get a 403.
+
+A request with no `Origin` at all — `<img src="http://127.0.0.1:4599/…">` and friends — can't read
+the reply, but it can still make this machine run a full extraction. Chrome labels those loads, so
+a cross-site one is refused too; `curl`, which sends no such label, still works.
 
 File operations are additionally confined to the download directory, so a tampered history record
 can't make the server open or delete something elsewhere on disk.
@@ -258,12 +314,14 @@ python server/test_server.py    # behaviour
 python server/test_docs.py      # this README vs the code
 ```
 
-**60 behaviour tests**, all offline — no network, no downloads. They cover the failure modes that
+**85 behaviour tests**, all offline — no network, no downloads. They cover the failure modes that
 actually bit: explicit ffmpeg resolution and encoder capability, container fallback, video-only
 audio merging, quality-tagged filenames, the resume-vs-restart decision, error-message translation,
-the origin guard, path confinement, partial cleanup, and history handling.
+the origin guard, path confinement, partial cleanup, history handling, the git fast-forward rules
+(including that a dirty checkout is left alone), the port-handover retry, and answering a progress
+poll from history after a restart.
 
-**22 documentation tests** check this README against the code — that every documented endpoint is
+**30 documentation tests** check this README against the code — that every documented endpoint is
 routed and every route documented, that the preset and configuration tables match what the server
 actually has, that the stated defaults are the real ones, and that the extension manifest lines up
 with the files and permissions it uses. Docs drift silently; these fail loudly instead.
@@ -282,9 +340,11 @@ with the files and permissions it uses. Docs drift silently; these fail loudly i
 | POST | `/open_file`, `/open_folder`, `/open_downloads_folder` | File manager integration |
 | POST | `/delete`, `/clear_history` | Remove records |
 | POST | `/redownload` | Re-run a past download |
-| GET | `/version`, POST `/update` | yt-dlp version and upgrades |
+| GET | `/version` | yt-dlp version and update state |
+| POST | `/update` | Upgrade the extension checkout and yt-dlp now |
+| GET | `/extension` | Extension version on disk, and the last checkout sync |
+| POST | `/update_extension` | Fast-forward the extension checkout only |
 
 ## Possible next steps
 
-Native messaging (auto-start the server with Chrome), whole-playlist support, a context-menu entry
-for links, and a bandwidth cap.
+Native messaging (auto-start the server with Chrome), whole-playlist support, and a bandwidth cap.
